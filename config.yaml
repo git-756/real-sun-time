@@ -1,15 +1,20 @@
 # 観測地点の設定
 location:
   latitude: 35.0153
-  longitude: 138.5187
-  
-# 計算対象の日付
-# "auto"  -> 今日の日付を使用
-# "2025-01-01" -> 指定した日付を使用
+  longitude: 138.5187 
+
+# 計算対象の日付 ("today" または "YYYY-MM-DD")
 target:
-  date: "auto"
+  date: "today"
+
+# 計算モード設定
+# "sunrise": 日の出 (時間を進めて計算)
+# "sunset" : 日の入り (時間を遡って計算)
+# "both"   : 両方計算
+mode: "both"
 
 # 計算設定
 settings:
-  check_distance_km: 20   # 何km先の山まで考慮するか
+  check_distance_km: 60   # 何km先の山まで考慮するか
   step_minutes: 2         # 時間を遡る刻み幅（分）
+  step_km: 0.5            # 地形チェックを500m刻みに細かくする
