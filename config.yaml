@@ -3,12 +3,13 @@ location:
   latitude: 35.0153
   longitude: 138.5187
   
-  
-# 計算対象の日付 (YYYY-MM-DD形式)
+# 計算対象の日付
+# "auto"  -> 今日の日付を使用
+# "2025-01-01" -> 指定した日付を使用
 target:
-  date: "2025-12-22"
+  date: "auto"
 
-# 計算設定（通常は変更不要）
+# 計算設定
 settings:
   check_distance_km: 20   # 何km先の山まで考慮するか
-  step_minutes: 1        # 何分刻みで計算するか（小さいほど高精度だが遅い）
+  step_minutes: 2         # 時間を遡る刻み幅（分）

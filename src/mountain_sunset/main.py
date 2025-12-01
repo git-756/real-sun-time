@@ -2,7 +2,7 @@ import ephem
 import math
 import requests
 import datetime
-import yaml  # 追加
+import yaml
 import sys
 from pathlib import Path
 
@@ -83,77 +83,90 @@ def get_horizon_elevation_angle(obs_lat, obs_lon, obs_alt, azimuth, check_distan
     return max_angle
 
 def calculate_actual_sunset(target_date_obj, lat, lon, settings):
-    """メイン計算ロジック"""
+    """
+    メイン計算ロジック（巻き戻し方式）
+    標準的な日の入り時刻から時間を遡り、太陽が山から顔を出した瞬間の直後を日の入りとする。
+    """
     
-    # 1. 観測者(Observer)の設定
+    # 1. 観測者設定
     observer = ephem.Observer()
     observer.lat = str(lat)
     observer.lon = str(lon)
     
-    # 標高取得
     print("観測地点の標高を取得中...")
     my_elevation = get_terrain_altitude(lat, lon)
     observer.elevation = my_elevation
     print(f"観測地点: 標高 {my_elevation}m")
 
-    # 2. 計算基準時刻の設定
-    # configの日付(JST)の正午を基準にして、その日の日没を探す
+    # 2. 計算基準時刻の設定（正午基準）
     target_noon_jst = datetime.datetime.combine(target_date_obj, datetime.time(12, 0)).replace(tzinfo=JST)
-    target_noon_utc = target_noon_jst.astimezone(datetime.timezone.utc)
-    
-    observer.date = target_noon_utc
+    observer.date = target_noon_jst.astimezone(datetime.timezone.utc)
 
-    # 3. 標準的な日の入り時刻（地平線）
+    # 3. 標準的な日の入り時刻（地平線）を計算
     sun = ephem.Sun()
     try:
         standard_sunset = observer.next_setting(sun)
-    except ephem.AlwaysUpError:
-        print("太陽が沈まない日（白夜など）です。")
-        return None
-    except ephem.NeverUpError:
-        print("太陽が昇らない日（極夜など）です。")
+    except (ephem.AlwaysUpError, ephem.NeverUpError):
+        print("太陽が昇らない、または沈まない日です。")
         return None
 
-    std_sunset_dt = standard_sunset.datetime().replace(tzinfo=datetime.timezone.utc)
-    print(f"標準的な日の入り(地平線): {std_sunset_dt.astimezone(JST).strftime('%Y-%m-%d %H:%M:%S')} (JST)")
+    # スタート地点（標準日の入り）
+    current_check_time = standard_sunset.datetime()
+    std_sunset_jst = current_check_time.replace(tzinfo=datetime.timezone.utc).astimezone(JST)
+    print(f"標準的な日の入り(地平線): {std_sunset_jst.strftime('%Y-%m-%d %H:%M:%S')} (JST)")
 
-    # 4. 地形考慮の計算ループ
-    # 標準日没の90分前からチェック開始
-    current_check_time = standard_sunset.datetime() - datetime.timedelta(minutes=90)
-    end_check_time = standard_sunset.datetime() + datetime.timedelta(minutes=10)
-    
+    # 設定読み込み
     step_minutes = settings.get('step_minutes', 2)
     check_dist = settings.get('check_distance_km', 20)
     
-    actual_sunset_time = None
+    print("\n--- 時間を遡って地形判定を開始 ---")
     
-    print("\n--- 地形との交差判定を開始 ---")
+    # 4. 巻き戻しループ
+    # 最大でも2時間(120分)遡れば十分と仮定
+    max_rewind_limit = datetime.timedelta(minutes=120)
+    elapsed_rewind = datetime.timedelta(0)
     
-    while current_check_time < end_check_time:
+    found_sunset_time = None
+
+    while elapsed_rewind < max_rewind_limit:
         observer.date = current_check_time
         sun.compute(observer)
         
         sun_az = math.degrees(sun.az)
         sun_alt = math.degrees(sun.alt)
         
-        if sun_alt < 0:
-            actual_sunset_time = current_check_time
-            print("既に地平線の下に沈んでいます。")
-            break
-
+        # 地形の仰角を取得
         terrain_angle = get_horizon_elevation_angle(lat, lon, my_elevation, sun_az, check_distance_km=check_dist, step_km=2.0)
         
         jst_time = current_check_time.replace(tzinfo=datetime.timezone.utc).astimezone(JST)
         print(f"時刻(JST): {jst_time.strftime('%H:%M')} | 太陽方位: {sun_az:.1f}° | 太陽高度: {sun_alt:.2f}° | 地形仰角: {terrain_angle:.2f}°")
         
-        if sun_alt <= terrain_angle:
-            actual_sunset_time = current_check_time
-            print(f"★ 山に隠れました！")
+        # 【判定ロジック】
+        # これまでは「太陽高度 < 地形」を探していたが、
+        # 今は「太陽高度 > 地形」になる瞬間（＝太陽が山の上に顔を出している状態）を探す。
+        # その状態になったら、その「1つ前のステップ（＝まだ隠れていた時刻）」が日の入り時刻。
+        
+        if sun_alt > terrain_angle:
+            print(f"★ 太陽が山の上に顔を出しました（遡り完了）")
+            # 現在の current_check_time は「太陽が出ている」。
+            # なので、山に隠れるのはこの「step_minutes 分後」あたり。
+            found_sunset_time = current_check_time + datetime.timedelta(minutes=step_minutes)
             break
-            
-        current_check_time += datetime.timedelta(minutes=step_minutes)
+        
+        # まだ隠れている（または地平線下）なら、時間を遡る
+        current_check_time -= datetime.timedelta(minutes=step_minutes)
+        elapsed_rewind += datetime.timedelta(minutes=step_minutes)
 
-    return actual_sunset_time
+    # ループを抜けたが結果がない場合（平地で、standard_sunsetの時点で既に地形より上だった場合など）
+    if found_sunset_time is None:
+        # 巻き戻してもずっと隠れていた場合（深い谷底など）か、
+        # 初回チェックですぐに見えてしまった場合。
+        # 初回(standard_sunset)で見えていたなら、日の入りはstandard_sunsetそのもの。
+        # ここでは簡易的に「標準日の入り」を返す。
+        print("地形の影響を検知できなかったか、標準時刻で既に沈んでいました。")
+        found_sunset_time = standard_sunset.datetime()
+
+    return found_sunset_time
 
 if __name__ == "__main__":
     # 設定ファイルの読み込み
@@ -161,17 +174,22 @@ if __name__ == "__main__":
     
     lat = config['location']['latitude']
     lon = config['location']['longitude']
-    date_str = config['target']['date']
+    date_conf = config['target']['date']
     settings = config['settings']
 
-    # 日付文字列をパース
-    try:
-        target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
-        print("エラー: 日付の形式が正しくありません。YYYY-MM-DD形式で指定してください。")
-        sys.exit(1)
+    # 日付の処理: "auto" なら今日、それ以外なら指定日
+    if date_conf == "auto":
+        target_date = datetime.date.today()
+        print(f"日付設定: auto -> {target_date} を使用します")
+    else:
+        try:
+            target_date = datetime.datetime.strptime(date_conf, "%Y-%m-%d").date()
+            print(f"日付設定: 指定日 -> {target_date} を使用します")
+        except ValueError:
+            print("エラー: 日付の形式が正しくありません。YYYY-MM-DD形式で指定してください。")
+            sys.exit(1)
 
-    print(f"計算対象日: {target_date}, 座標: {lat}, {lon}")
+    print(f"座標: {lat}, {lon}")
     
     real_sunset_utc = calculate_actual_sunset(target_date, lat, lon, settings)
 
@@ -181,6 +199,8 @@ if __name__ == "__main__":
         else:
              real_sunset_jst = real_sunset_utc.datetime().replace(tzinfo=datetime.timezone.utc).astimezone(JST)
              
-        print(f"\n予想される地形考慮後の日の入り時刻: {real_sunset_jst.strftime('%Y/%m/%d %H:%M:%S')} (JST)")
+        print(f"\n==============================================")
+        print(f"予想される地形考慮後の日の入り時刻: {real_sunset_jst.strftime('%Y/%m/%d %H:%M:%S')} (JST)")
+        print(f"==============================================")
     else:
-        print("計算範囲内で日の入りを確認できませんでした。")
+        print("計算できませんでした。")
