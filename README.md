@@ -74,4 +74,4 @@
 
 ## 作成者
 [Samurai-Human-Go](https://samurai-human-go.com/%e9%81%8b%e5%96%b6%e8%80%85%e6%83%85%e5%a0%b1/)
-- [ブログ記事: 【Python】山に沈む夕日の時間を計算するスクリプト開発記](https://samurai-human-go.com/python-mountain-sunset-calculation/)
+- [ブログ記事: 【Python】「真の日の入り」時刻を計算！地形データを考慮して太陽が山に隠れる瞬間を予測する](https://samurai-human-go.com/python-calculate-true-sunset-terrain/)
